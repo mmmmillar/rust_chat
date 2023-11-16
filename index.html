@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <script
+      src="https://unpkg.com/htmx.org@1.9.8"
+      integrity="sha384-rgjA7mptc2ETQqXoYC3/zJvkU7K/aP44Y+z7xQuJiVnB/422P/Ak+F/AqFR7E4Wr"
+      crossorigin="anonymous"
+    ></script>
+    <script src="https://unpkg.com/htmx.org/dist/ext/ws.js"></script>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body
+    class="flex flex-col items-center justify-center w-screen min-h-screen bg-gray-100 text-gray-800 p-10"
+  >
+    <div
+      class="flex flex-col flex-grow w-full max-w-xl bg-white shadow-xl rounded-lg overflow-hidden"
+    >
+      <div
+        id="events"
+        class="flex flex-col flex-grow h-0 p-4 overflow-auto"
+      ></div>
+      <div
+        class="bg-gray-300 p-4"
+        hx-ext="ws"
+        ws-connect="ws://localhost:3030/chat"
+      >
+        <form ws-send>
+          <input
+            id="message"
+            name="message"
+            class="flex items-center h-10 w-full rounded px-3 text-sm"
+            type="text"
+            placeholder="Type your message…"
+          />
+        </form>
+      </div>
+    </div>
+    <script type="text/javascript">
+      htmx.on("htmx:wsConfigSend", function (e) {
+        e.detail.messageBody = e.detail.parameters["message"];
+      });
+
+      htmx.on("htmx:wsAfterSend", function (e) {
+        document.getElementById("message").value = "";
+      });
+    </script>
+  </body>
+</html>

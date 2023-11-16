@@ -1,8 +1,9 @@
+use askama::Template;
 use futures_util::{SinkExt, StreamExt, TryFutureExt};
-use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
+use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::{mpsc, RwLock};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use warp::filters::ws::WebSocket;
@@ -12,22 +13,6 @@ use warp::Filter;
 type Clients = Arc<RwLock<HashMap<usize, mpsc::UnboundedSender<Message>>>>;
 
 static NEXT_USER_ID: AtomicUsize = AtomicUsize::new(1);
-
-#[derive(Clone, Serialize)]
-enum ChatEventType {
-    IJoined,
-    TheyJoined,
-    MessageSent,
-    MessageReceived,
-    TheyDisconnected,
-}
-
-#[derive(Clone, Serialize)]
-struct ChatEvent {
-    sender: usize,
-    event_type: ChatEventType,
-    message: String,
-}
 
 #[tokio::main]
 async fn main() {
@@ -95,26 +80,56 @@ async fn on_connect(ws: WebSocket, clients: Clients) {
     eprintln!("active clients: {:?}", clients.read().await.keys());
 }
 
+#[derive(Template)]
+#[template(path = "sent_message.html")]
+struct SentMessageTemplate<'a> {
+    message: &'a str,
+    sender: &'a str,
+}
+
+#[derive(Template)]
+#[template(path = "received_message.html")]
+struct ReceivedMessageTemplate<'a> {
+    message: &'a str,
+    sender: &'a str,
+}
+
+#[derive(Template)]
+#[template(path = "system_message.html")]
+struct SystemMessageTemplate<'a> {
+    message: &'a str,
+}
+
+fn send_message(message: Message, sender: usize, receiver: usize, tx: &UnboundedSender<Message>) {
+    eprintln!(
+        "sending message from {} to {}: {:?}",
+        sender, receiver, message
+    );
+
+    if let Err(_) = tx.send(message) {}
+}
+
 async fn register(sender: usize, clients: &Clients) {
-    clients.read().await.iter().for_each(|(client_id, tx)| {
-        let event = ChatEvent {
-            sender,
-            event_type: if &sender == client_id {
-                ChatEventType::IJoined
-            } else {
-                ChatEventType::TheyJoined
-            },
-            message: String::from(""),
+    clients.read().await.iter().for_each(|(&client_id, tx)| {
+        let message = if sender == client_id {
+            Message::text(
+                SystemMessageTemplate {
+                    message: &format!("Welcome to the chat {}", sender),
+                }
+                .render()
+                .unwrap(),
+            )
+        } else {
+            Message::text(
+                SystemMessageTemplate {
+                    message: &format!("{} has joined the chat", sender),
+                }
+                .render()
+                .unwrap(),
+            )
         };
 
-        let message = Message::text(serde_json::to_string(&event).unwrap());
-
-        eprintln!(
-            "sending message from {} to {}: {:?}",
-            &event.sender, client_id, &event.message
-        );
-
-        if let Err(_) = tx.send(message) {}
+        send_message(message, sender, client_id, tx)
     })
 }
 
@@ -124,43 +139,41 @@ async fn disconnect(sender: usize, clients: &Clients) {
         .await
         .iter()
         .filter(|(&client_id, _)| client_id != sender)
-        .for_each(|(client_id, tx)| {
-            let event = ChatEvent {
-                sender,
-                event_type: ChatEventType::TheyDisconnected,
-                message: String::from(""),
-            };
-
-            let message = Message::text(serde_json::to_string(&event).unwrap());
-
-            eprintln!(
-                "sending message from {} to {}: {:?}",
-                &event.sender, client_id, &event.message
+        .for_each(|(&client_id, tx)| {
+            let message = Message::text(
+                SystemMessageTemplate {
+                    message: &format!("{} has left the chat", sender),
+                }
+                .render()
+                .unwrap(),
             );
 
-            if let Err(_) = tx.send(message) {}
+            send_message(message, sender, client_id, tx)
         })
 }
 
 async fn broadcast_message(sender: usize, msg: &str, clients: &Clients) {
-    clients.read().await.iter().for_each(|(client_id, tx)| {
-        let event = ChatEvent {
-            sender,
-            event_type: if &sender == client_id {
-                ChatEventType::MessageSent
-            } else {
-                ChatEventType::MessageReceived
-            },
-            message: String::from(msg),
+    clients.read().await.iter().for_each(|(&client_id, tx)| {
+        let message = if sender == client_id {
+            Message::text(
+                SentMessageTemplate {
+                    message: msg,
+                    sender: &sender.to_string(),
+                }
+                .render()
+                .unwrap(),
+            )
+        } else {
+            Message::text(
+                ReceivedMessageTemplate {
+                    message: msg,
+                    sender: &sender.to_string(),
+                }
+                .render()
+                .unwrap(),
+            )
         };
 
-        let message = Message::text(serde_json::to_string(&event).unwrap());
-
-        eprintln!(
-            "sending message from {} to {}: {:?}",
-            &event.sender, client_id, &event.message
-        );
-
-        if let Err(_) = tx.send(message) {}
+        send_message(message, sender, client_id, tx)
     })
 }
